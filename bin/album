@@ -1,0 +1,134 @@
+#!/usr/bin/php
+<?php
+
+namespace Tools;
+
+use Nette\Configurator;
+use Nette\Utils\FileSystem;
+use Nette\Utils\Finder;
+
+$container = (function () {
+	require __DIR__ . '/../vendor/autoload.php';
+
+	//FileSystem::delete(__DIR__ . '/temp');
+	//FileSystem::createDir(__DIR__ . '/temp');
+	//FileSystem::createDir(__DIR__ . '/temp/cache');
+	echo exec('sudo chown -R tulinkry:tulinkry ' . __DIR__ . '/../www');
+	echo exec('sudo chown -R tulinkry:tulinkry ' . __DIR__ . '/../temp');
+
+	register_shutdown_function(function() {
+	    //FileSystem::delete(__DIR__ . '/temp');
+		echo exec('sudo chmod -R g=u ' . __DIR__ . '/../temp' );
+		echo exec('sudo chown -R $USER:www-data ' . __DIR__ . '/../temp');
+		echo exec('sudo chmod -R g=u ' . __DIR__ . '/../www' );
+		echo exec('sudo chown -R $USER:www-data ' . __DIR__ . '/../www');
+	});
+
+	$configurator = new Configurator;
+
+	$configurator->setDebugMode(FALSE);
+	$configurator->setTimeZone('Europe/Prague');
+	$configurator->setTempDirectory(__DIR__ . '/../temp');
+
+	$configurator->createRobotLoader()
+		->addDirectory(__DIR__ . '/../app')
+		->addDirectory(__DIR__ . "/../vendor/tulinkry/photos")
+		->register();
+
+	$configurator->addConfig(__DIR__ . '/../app/config/config.neon');
+	$configurator->addConfig(__DIR__ . '/../app/config/config.local.neon');
+
+	$configurator->addParameters([
+		'appDir' => __DIR__ . '/../app',
+		'wwwDir' => __DIR__ . '/../www'
+	]);
+
+	$container = $configurator->createContainer();
+
+	error_reporting(E_ALL ^ E_USER_DEPRECATED);
+
+	return $container;
+})();
+
+$photos = $container->getByType('Tulinkry\Photos\Services\IPhotosProvider');
+$albums = $container->getByType('Tulinkry\Photos\Services\IAlbumProvider');
+$content = $container->getByType('Tulinkry\Photos\Services\IContentProvider');
+$users = $container->getByType('Tulinkry\Photos\Services\IUserProvider');
+
+if($_SERVER['argc'] < 2) {
+	echo "Usage: ".$_SERVER['argv'][0]." <path>\n";
+	echo "\n";
+	echo "path\t\tpath to directory with photos\n";
+	exit(1);
+}
+
+$directory = $_SERVER['argv'][1];
+
+if(!is_dir($directory) || !is_readable($directory)) {
+	echo sprintf("Unable to read the target directory \"%s\".\n", $directory);
+	exit(2);
+}
+
+$user = $users->find(1);
+$album = $albums->find(1);
+
+if($_SERVER['argc'] >= 3) {
+	// album name provided
+	$albumName = $_SERVER['argv'][2];
+	list($new, $album) = (function($albumName) use ($user, $albums) {
+		foreach($user->albums as $a) {
+			$a = $albums->find($a->id);
+			if(isset($a->metadata->name) && $a->metadata->name === $albumName)
+				return array(false, $a);
+		}
+		return array(true, $albums->create(1, array('name' => $albumName)));
+	})($albumName);
+	if($new) {
+		echo sprintf("The album \"%s\" created.\n", $albumName);
+	} else {
+		echo sprintf("The album \"%s\" already exists. Photos will be added.\n", $albumName);
+	}
+}
+
+if($album === NULL) {
+	echo sprintf("Unable to find album \"%s\".\n", 1);
+	exit(2);
+}
+
+$photoObjects = array_map(function($p) use ($photos) {
+	return $photos->find($p->id);
+}, $album->photos);
+
+$i = 0;
+foreach(Finder::findFiles('*')->filter(function($f) {
+			return in_array(mime_content_type($f->getRealPath()), ['image/gif', 'image/png', 'image/jpeg'], TRUE);
+		})->in($directory) as $path => $file) {
+
+	if((function($file) use ($photoObjects) {
+		foreach($photoObjects as $photo) {
+			if($photo->originalFilename === $file->getFilename())
+				return true;
+		}
+		return false;
+	})($file))
+		continue;
+
+	try {
+		$photos->create($album->id, $path);
+		echo "Adding $path\n";
+		$i ++;
+	} catch (\Exception $e) {
+		echo sprintf("Unable to create a photo located in \"%s\". %s\n", $path, $e->getMessage());
+		continue;
+	}
+}
+if($i === 0) {
+	echo "No new photo.\n";
+}
+
+$cache = new \Nette\Caching\Cache($container->getByType('Nette\Caching\IStorage'));
+$cache->clean(array(
+	\Nette\Caching\Cache::ALL => true
+));
+
+echo "$i images processed. Total in album: " . ($i + count($photoObjects)) . "\n";

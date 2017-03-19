@@ -1,0 +1,38 @@
+{block content}
+	<div id='error' class='alert alert-danger' style='display: none'>
+	</div>
+
+	<div id='content'>
+	</div>
+{/block}
+
+{block scripts}
+{include #parent}
+
+<script type="text/javascript">
+	var url = 'http://localhost/photos/www/users/1/albums/{$albumId|noescape}';
+	$.ajax({
+		url: url,
+		dataType: 'json',
+		beforeSend: function() {
+			$('#error').hide();
+		}
+	}).done(function(data) {
+		$('#content').empty()
+		$.each(data.photos, function() {
+			$('#content').append(
+				$('<a>')
+					.attr('href', this.downloadUrl)
+					.attr('title', 'Fotka')
+					.append(
+						$('<img>')
+							.attr('src', this.downloadUrl)
+							.attr('height', '200px')
+					)
+			)
+		});
+	}).fail(function(x) {
+		$('#error').show().text('Error occured');
+	})
+</script>
+{/block}
