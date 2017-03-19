@@ -10,7 +10,7 @@
 {include #parent}
 
 <script type="text/javascript">
-	var url = 'http://localhost/photos/www/users/1/albums/{$albumId|noescape}';
+	var url = {link Photos:Download:photos, albumId => $albumId}
 	$.ajax({
 		url: url,
 		dataType: 'json',
